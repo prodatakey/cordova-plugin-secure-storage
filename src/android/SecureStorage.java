@@ -16,7 +16,6 @@ import org.apache.cordova.CordovaPlugin;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONArray;
-import javax.crypto.Cipher;
 
 public class SecureStorage extends CordovaPlugin {
     private static final String TAG = "SecureStorage";
@@ -29,47 +28,29 @@ public class SecureStorage extends CordovaPlugin {
     private Hashtable<String, SharedPreferencesHandler> SERVICE_STORAGE = new Hashtable<String, SharedPreferencesHandler>();
     private String INIT_SERVICE;
     private String INIT_PACKAGENAME;
-    private volatile CallbackContext initContext, secureDeviceContext;
-    private volatile boolean initContextRunning = false;
 
-    @Override
-    public void onResume(boolean multitasking) {
-        if (secureDeviceContext != null) {
-            if (isDeviceSecure()) {
-                secureDeviceContext.success();
-            } else {
-                secureDeviceContext.error(MSG_DEVICE_NOT_SECURE);
-            }
-            secureDeviceContext = null;
-        }
-
-        if (initContext != null && !initContextRunning) {
-            cordova.getThreadPool().execute(new Runnable() {
-                public void run() {
-                    initContextRunning = true;
-                    try {
-                        String alias = service2alias(INIT_SERVICE);
-                        if (!RSA.isEntryAvailable(alias)) {
-                            //Solves Issue #96. The RSA key may have been deleted by changing the lock type.
-                            getStorage(INIT_SERVICE).clear();
-                            RSA.createKeyPair(getContext(), alias);
-                        }
-                        initSuccess(initContext);
-                    } catch (Exception e) {
-                        Log.e(TAG, "Init failed :", e);
-                        initContext.error(e.getMessage());
-                    } finally {
-                        initContext = null;
-                        initContextRunning = false;
+    private void generateKeyPair(CallbackContext context) {
+        cordova.getThreadPool().execute(new Runnable() {
+            public void run() {
+                try {
+                    String alias = service2alias(INIT_SERVICE);
+                    if (!RSA.isEntryAvailable(alias)) {
+                        //Solves Issue #96. The RSA key may have been deleted by changing the lock type.
+                        getStorage(INIT_SERVICE).clear();
+                        RSA.createKeyPair(getContext(), alias);
                     }
+                    initSuccess(context);
+                } catch (Exception e) {
+                    Log.e(TAG, "Init failed :", e);
+                    context.error(e.getMessage());
                 }
-            });
-        }
+            }
+        });
     }
 
     @Override
     public boolean execute(String action, CordovaArgs args, final CallbackContext callbackContext) throws JSONException {
-        if(!SUPPORTED){
+        if (!SUPPORTED) {
             Log.w(TAG, MSG_NOT_SUPPORTED);
             callbackContext.error(MSG_NOT_SUPPORTED);
             return false;
@@ -80,7 +61,7 @@ public class SecureStorage extends CordovaPlugin {
             String packageName = options.optString("packageName", getContext().getPackageName());
 
             Context ctx = null;
-            
+
             // Solves #151. By default, we use our own ApplicationContext
             // If packageName is provided, we try to get the Context of another Application with that packageName
             try {
@@ -103,8 +84,7 @@ public class SecureStorage extends CordovaPlugin {
                 Log.e(TAG, MSG_DEVICE_NOT_SECURE);
                 callbackContext.error(MSG_DEVICE_NOT_SECURE);
             } else if (!RSA.isEntryAvailable(alias)) {
-                initContext = callbackContext;
-                unlockCredentials();
+                generateKeyPair(callbackContext);
             } else {
                 initSuccess(callbackContext);
             }
@@ -161,8 +141,11 @@ public class SecureStorage extends CordovaPlugin {
             return true;
         }
         if ("secureDevice".equals(action)) {
-            secureDeviceContext = callbackContext;
-            unlockCredentials();
+            if (isDeviceSecure()) {
+                callbackContext.success();
+            } else {
+                callbackContext.error(MSG_DEVICE_NOT_SECURE);
+            }
             return true;
         }
         if ("remove".equals(action)) {
@@ -187,7 +170,7 @@ public class SecureStorage extends CordovaPlugin {
     }
 
     private boolean isDeviceSecure() {
-        KeyguardManager keyguardManager = (KeyguardManager)(getContext().getSystemService(Context.KEYGUARD_SERVICE));
+        KeyguardManager keyguardManager = (KeyguardManager) (getContext().getSystemService(Context.KEYGUARD_SERVICE));
         try {
             Method isSecure = null;
             isSecure = keyguardManager.getClass().getMethod("isDeviceSecure");
@@ -198,8 +181,7 @@ public class SecureStorage extends CordovaPlugin {
     }
 
     private String service2alias(String service) {
-        String res = INIT_PACKAGENAME + "." + service;
-        return  res;
+        return INIT_PACKAGENAME + "." + service;
     }
 
     private SharedPreferencesHandler getStorage(String service) {
@@ -208,15 +190,6 @@ public class SecureStorage extends CordovaPlugin {
 
     private void initSuccess(CallbackContext context) {
         context.success();
-    }
-
-    private void unlockCredentials() {
-        cordova.getActivity().runOnUiThread(new Runnable() {
-            public void run() {
-                Intent intent = new Intent("com.android.credentials.UNLOCK");
-                startActivity(intent);
-            }
-        });
     }
 
     private Context getContext() {
@@ -234,10 +207,6 @@ public class SecureStorage extends CordovaPlugin {
         }
 
         return pkgContext;
-    }
-
-    private void startActivity(Intent intent) {
-        cordova.getActivity().startActivity(intent);
     }
 
 }
